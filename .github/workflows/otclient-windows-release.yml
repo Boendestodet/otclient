@@ -101,8 +101,12 @@ jobs:
             $builder = New-Item -ItemType Directory -Path 'dist/internal-encryptor'
             Copy-Item "$out/*" -Destination $builder.FullName -Recurse
             # This command encrypts the copied files in its working directory.
+            $initPath = Join-Path $client.FullName 'init.lua'
+            $plainHash = (Get-FileHash -LiteralPath $initPath).Hash
             $process = Start-Process (Join-Path $builder.FullName $exe[0].Name) -ArgumentList '--encrypt' -WorkingDirectory $client.FullName -Wait -PassThru
-            if ($process.ExitCode -ne 0) { throw 'Asset encryption failed' }
+            if ($process.ExitCode -ne 0 -or (Get-FileHash -LiteralPath $initPath).Hash -eq $plainHash) {
+              throw 'The builder did not encrypt staged init.lua'
+            }
             $config = Get-Content src/framework/config.h -Raw
             $config.Replace('#define ENABLE_ENCRYPTION_BUILDER 1', '#define ENABLE_ENCRYPTION_BUILDER 0') |
               Set-Content src/framework/config.h -NoNewline
