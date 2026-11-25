@@ -1,0 +1,131 @@
+name: OTClient Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      encrypted:
+        description: Build encrypted client resources and a separate internal encryptor
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025-vs2026
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read vcpkg baseline
+        shell: pwsh
+        run: |
+          $baseline = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'builtin-baseline'
+          if ($baseline -notmatch '^[a-f0-9]{40}$') { throw 'Invalid vcpkg baseline' }
+          "VCPKG_BASELINE=$baseline" >> $env:GITHUB_ENV
+
+      - name: Set up vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitURL: https://github.com/microsoft/vcpkg.git
+          vcpkgGitCommitId: ${{ env.VCPKG_BASELINE }}
+
+      - name: Prepare update URL and encryption settings
+        shell: pwsh
+        env:
+          UPDATER_URL: ${{ vars.OTCLIENT_UPDATER_URL }}
+          ENCRYPTION_PASSWORD: ${{ secrets.OTCLIENT_ENCRYPTION_PASSWORD }}
+          ENCRYPTION_HEADER: ${{ vars.OTCLIENT_ENCRYPTION_HEADER }}
+          ENCRYPTED: ${{ inputs.encrypted }}
+        run: |
+          if ($env:UPDATER_URL) {
+            $url = $null
+            if ($env:UPDATER_URL -notmatch '^https://[A-Za-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9._~/-]+$' -or
+                -not [Uri]::TryCreate($env:UPDATER_URL, [UriKind]::Absolute, [ref]$url)) {
+              throw 'OTCLIENT_UPDATER_URL must be an HTTPS URL to updater.php'
+            }
+            $init = Get-Content init.lua -Raw
+            $pattern = '(?m)^\s*(?:--\s*)?updater\s*=.*$'
+            if ([regex]::Matches($init, $pattern).Count -ne 1) { throw 'Updater setting not found uniquely' }
+            $init -replace $pattern, ('    updater = "' + $env:UPDATER_URL + '",') |
+              Set-Content init.lua -NoNewline
+          }
+          if ($env:ENCRYPTED -eq 'true') {
+            if ($env:ENCRYPTION_PASSWORD -cnotmatch '^[A-Za-z0-9]{100,256}$') {
+              throw 'Set repository secret OTCLIENT_ENCRYPTION_PASSWORD to 100-256 alphanumeric characters'
+            }
+            if ($env:ENCRYPTION_HEADER -cnotmatch '^[A-Za-z0-9]{16,64}$') {
+              throw 'Set repository variable OTCLIENT_ENCRYPTION_HEADER to 16-64 alphanumeric characters'
+            }
+            $config = Get-Content src/framework/config.h -Raw
+            $values = @{
+              ENABLE_ENCRYPTION = '1'
+              ENABLE_ENCRYPTION_BUILDER = '1'
+              ENCRYPTION_PASSWORD = 'AY_OBFUSCATE("' + $env:ENCRYPTION_PASSWORD + '")'
+              ENCRYPTION_HEADER = 'AY_OBFUSCATE("' + $env:ENCRYPTION_HEADER + '")'
+            }
+            foreach ($key in $values.Keys) {
+              $pattern = "(?m)^#define $key [^\r\n]+"
+              if ([regex]::Matches($config, $pattern).Count -ne 1) { throw "Cannot locate $key" }
+              $config = $config -replace $pattern, "#define $key $($values[$key])"
+            }
+            Set-Content src/framework/config.h $config -NoNewline
+            # The upstream Windows builder waits on a modal success dialog.
+            $main = Get-Content src/main.cpp -Raw
+            $dialog = 'MessageBoxA(NULL, "Encryption complete", "Success", 0);'
+            if (-not $main.Contains($dialog)) { throw 'Encryption completion dialog not found' }
+            Set-Content src/main.cpp ($main.Replace($dialog, '')) -NoNewline
+          }
+
+      - name: Build Windows executable
+        uses: lukka/run-cmake@v10
+        with:
+          configurePreset: windows-release
+          buildPreset: windows-release
+          configurePresetAdditionalArgs: "['-DTOGGLE_BIN_FOLDER=ON', '-DOPTIONS_ENABLE_IPO=OFF', '-DOTCLIENT_BUILD_TESTS=OFF']"
+
+      - name: Stage resources and rebuild the player executable
+        shell: pwsh
+        env:
+          ENCRYPTED: ${{ inputs.encrypted }}
+        run: |
+          $out = 'build/windows-release/bin'
+          $exe = @(Get-ChildItem $out -File -Filter 'otclient*.exe')
+          if ($exe.Count -ne 1) { throw 'Expected one OTClient executable' }
+          $resources = @('init.lua', 'data', 'modules', 'mods') | Where-Object { Test-Path $_ }
+          $client = New-Item -ItemType Directory -Path 'dist/client'
+          Copy-Item $resources -Destination $client.FullName -Recurse
+          if ($env:ENCRYPTED -eq 'true') {
+            $builder = New-Item -ItemType Directory -Path 'dist/internal-encryptor'
+            Copy-Item "$out/*" -Destination $builder.FullName -Recurse
+            # This command encrypts the copied files in its working directory.
+            $process = Start-Process (Join-Path $builder.FullName $exe[0].Name) -ArgumentList '--encrypt' -WorkingDirectory $client.FullName -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw 'Asset encryption failed' }
+            $config = Get-Content src/framework/config.h -Raw
+            $config.Replace('#define ENABLE_ENCRYPTION_BUILDER 1', '#define ENABLE_ENCRYPTION_BUILDER 0') |
+              Set-Content src/framework/config.h -NoNewline
+            cmake --build --preset windows-release
+            if ($LASTEXITCODE -ne 0) { throw 'Player build failed' }
+          }
+          Get-ChildItem $out -File | Where-Object { $_.Extension -in @(".exe", ".dll") } |
+            Copy-Item -Destination $client.FullName
+          foreach ($extra in @('cacert.pem', 'otclientrc.lua', 'LICENSE')) {
+            if (Test-Path $extra) { Copy-Item $extra -Destination $client.FullName }
+          }
+
+      - name: Upload player client
+        uses: actions/upload-artifact@v7
+        with:
+          name: otclient-windows-player
+          path: dist/client/
+          if-no-files-found: error
+
+      - name: Upload internal encryptor
+        if: inputs.encrypted
+        uses: actions/upload-artifact@v7
+        with:
+          name: otclient-windows-internal-encryptor
+          path: dist/internal-encryptor/
+          if-no-files-found: error
