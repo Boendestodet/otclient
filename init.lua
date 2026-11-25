@@ -5,8 +5,8 @@
 Services = {
     updater = "https://r3kt.se/api/updater", --./updater
     status = "https://r3kt.se/api/status", --./client_entergame | ./client_topmenu
-    --websites = "https://r3kt.se/account", --./client_entergame "Forgot password and/or email"
-    --createAccount = "https://r3kt.se/register", --./client_entergame -- createAccount.lua
+    websites = "https://r3kt.se/account", --./client_entergame "Forgot password and/or email"
+    createAccount = "https://r3kt.se/register", --./client_entergame -- createAccount.lua
     getCoinsUrl = "https://r3kt.se/premium-shop", --./game_market
     clientAssets = {
         enabled = true,
