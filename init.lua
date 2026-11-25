@@ -3,11 +3,11 @@
 
 -- updater
 Services = {
-    --updater = "http://localhost/api/updater.php", --./updater
-    --status = "http://localhost/login.php", --./client_entergame | ./client_topmenu
-    --websites = "http://localhost/?subtopic=accountmanagement", --./client_entergame "Forgot password and/or email"
-    --createAccount = "http://localhost/clientcreateaccount.php", --./client_entergame -- createAccount.lua
-    --getCoinsUrl = "http://localhost/?subtopic=shop&step=terms", --./game_market
+    updater = "https://r3kt.se/api/updater", --./updater
+    status = "https://r3kt.se/api/status", --./client_entergame | ./client_topmenu
+    --websites = "https://r3kt.se/account", --./client_entergame "Forgot password and/or email"
+    --createAccount = "https://r3kt.se/register", --./client_entergame -- createAccount.lua
+    getCoinsUrl = "https://r3kt.se/premium-shop", --./game_market
     clientAssets = {
         enabled = true,
         repository = "dudantas/tibia-client",
